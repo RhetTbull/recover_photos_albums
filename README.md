@@ -36,7 +36,7 @@ The photos associated with the album are retrieved from the database and the Pho
 to create a new album with the same name as the deleted album and add the photos to the album.
 
 > [!NOTE]
-> Your terminal app (`Terminal.app` unless you are using a custom terminal) will prompt for permissions to access the Photos database and to automate Photos.The script will not work without these permissions. If you encounter issues running the script, check in `System Settings... > Privacy & Security > Photos` to ensure the terminal has acces as well as `System Settings... > Privacy & Security > Automation` to ensure the terminal has access to Photos.
+> Your terminal app (`Terminal.app` unless you are using a custom terminal) will prompt for permissions to access the Photos database and to automate Photos. The script will not work without these permissions. If you encounter issues running the script, check in `System Settings... > Privacy & Security > Photos` to ensure the terminal has acces as well as `System Settings... > Privacy & Security > Automation` to ensure the terminal has access to Photos.
 
 ## Limitations
 
