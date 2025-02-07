@@ -10,12 +10,15 @@ I recommend running this script with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -L -o recover_photos_albums.py https://raw.githubusercontent.com/RhetTbull/recover_photos_albums/refs/heads/main/recover_photos_albums.py
 uv run recover_photos_albums.py
 ```
 
 Alternatively, you can run the script directly. Create a virtual environment and install the dependencies:
 
 ```bash
+git clone git@github.com:RhetTbull/recover_photos_albums.git
+cd recover_photos_albums
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
