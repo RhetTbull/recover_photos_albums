@@ -35,6 +35,17 @@ The script queries this database to find albums that have been deleted and allow
 The photos associated with the album are retrieved from the database and the Photos AppleScript interface is used
 to create a new album with the same name as the deleted album and add the photos to the album.
 
+<div class="note">
+
+**Note:** Your terminal app (`Terminal.app` unless you are using a custom terminal)
+will prompt for permissions to access the Photos database and to automate Photos.
+The script will not work without these permissions.
+If you encounter issues running the script,
+check in `System Settings... > Privacy & Security > Photos` to ensure the terminal has acces as well as
+`System Settings... > Privacy & Security > Automation` to ensure the terminal has access to Photos.
+
+</div>
+
 ## Limitations
 
 This script only works on macOS.
