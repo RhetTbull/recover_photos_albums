@@ -178,9 +178,7 @@ def get_albums_info(db_path: str) -> list[Album]:
         ZG.ZKIND IN (2, 4000) AND -- regular albums (2) and folders (4000)
         ZG.ZPARENTFOLDER IS NOT NULL -- exclude top-level library
     GROUP BY
-        ZG.Z_PK
-    ORDER BY
-        ZG.ZTRASHEDDATE;
+        ZG.Z_PK;
     """
 
     conn, cursor = sqlite_open_ro(db_path)
@@ -384,31 +382,55 @@ def recover_album(album: Album, db_path: str) -> None:
 
 
 def get_deleted_items(db_path: str) -> list[Album]:
-    """Get all deleted albums and folders from the Photos library.
+    """Get all deleted albums and folders from the Photos library, sorted by deletion date.
 
     Args:
         db_path: Path to the Photos database.
 
     Returns:
-        List of deleted Album objects.
+        List of deleted Album objects, sorted by deletion date (most recent first).
     """
     all_items = get_albums_info(db_path)
-    return [item for item in all_items if item.trashed]
+    deleted_items = [item for item in all_items if item.trashed]
+    
+    # Sort by deletion date, most recent first (None dates go to end)
+    deleted_items.sort(
+        key=lambda x: x.trashed_date if x.trashed_date else datetime.datetime.min,
+        reverse=True
+    )
+    
+    return deleted_items
 
 
-def confirm_recovery(album: Album) -> bool:
-    """Ask user to confirm recovery of the selected item.
+def confirm_recovery(albums: list[Album]) -> bool:
+    """Ask user to confirm recovery of the selected items.
 
     Args:
-        album: The Album object to confirm recovery for.
+        albums: List of Album objects to confirm recovery for.
 
     Returns:
         True if user confirms, False otherwise.
     """
-    item_type = "folder" if album.kind == 4000 else "album"
-    return questionary.confirm(
-        f"Are you sure you want to restore the {item_type} '{album.title}'?"
-    ).ask()
+    if len(albums) == 1:
+        album = albums[0]
+        item_type = "folder" if album.kind == 4000 else "album"
+        return questionary.confirm(
+            f"Are you sure you want to restore the {item_type} '{album.title}'?"
+        ).ask()
+    else:
+        folders = [a for a in albums if a.kind == 4000]
+        regular_albums = [a for a in albums if a.kind == 2]
+        
+        summary_parts = []
+        if folders:
+            summary_parts.append(f"{len(folders)} folder{'s' if len(folders) != 1 else ''}")
+        if regular_albums:
+            summary_parts.append(f"{len(regular_albums)} album{'s' if len(regular_albums) != 1 else ''}")
+        
+        summary = " and ".join(summary_parts)
+        return questionary.confirm(
+            f"Are you sure you want to restore {summary} ({len(albums)} total items)?"
+        ).ask()
 
 
 def uuids_to_photos(uuids: list[str], console: Console) -> list[photoscript.Photo]:
@@ -433,7 +455,15 @@ def uuids_to_photos(uuids: list[str], console: Console) -> list[photoscript.Phot
     return photos
 
 
-def select_album_or_exit(albums: list[Album]) -> Album:
+def select_albums_or_exit(albums: list[Album]) -> list[Album]:
+    """Allow user to select multiple albums/folders for recovery.
+    
+    Args:
+        albums: List of Album objects to choose from.
+        
+    Returns:
+        List of selected Album objects.
+    """
     album_choices = {}
     for album in albums:
         # Build display text with folder path if available
@@ -448,21 +478,26 @@ def select_album_or_exit(albums: list[Album]) -> Album:
             else "folder"
         )
 
+        date_str = album.trashed_date.strftime('%Y-%m-%d') if album.trashed_date else "unknown date"
         display_text = (
             f"{album.title}{folder_display} [{item_type}], "
-            + f"deleted on {album.trashed_date.strftime('%Y-%m-%d')}, "
+            + f"deleted on {date_str}, "
             + f"{photo_text}"
         )
         album_choices[display_text] = album
 
     choices = list(album_choices.keys())
-    choices.append("Exit")
-    choice = questionary.select(
-        "Select an album or folder to restore", choices=choices
+    
+    selected_choices = questionary.checkbox(
+        "Select albums or folders to restore (use SPACE to select, ENTER to confirm):",
+        choices=choices,
+        instruction="(Use ↑↓ to navigate, SPACE to select, ENTER to confirm)"
     ).ask()
-    if choice == "Exit":
+    
+    if not selected_choices:
         exit()
-    return album_choices[choice]
+    
+    return [album_choices[choice] for choice in selected_choices]
 
 
 @click.command(name="recover_photos_albums")
@@ -478,18 +513,25 @@ def main(library: str | None):
         echo("No deleted albums or folders found.")
         return
 
-    # Let user select which item to restore
-    selected_item = select_album_or_exit(deleted_items)
+    # Let user select which items to restore
+    selected_items = select_albums_or_exit(deleted_items)
 
     # Confirm recovery with user
-    if not confirm_recovery(selected_item):
+    if not confirm_recovery(selected_items):
         exit()
 
-    # Perform the recovery based on item type
-    if selected_item.kind == 4000:  # Folder
-        recover_folder(selected_item)
-    else:  # Album
-        recover_album(selected_item, db_path)
+    # Perform the recovery for each selected item
+    echo(f"\nRestoring {len(selected_items)} item{'s' if len(selected_items) != 1 else ''}...")
+    
+    for i, item in enumerate(selected_items, 1):
+        echo(f"\n[{i}/{len(selected_items)}] Processing '{item.title}'...")
+        
+        if item.kind == 4000:  # Folder
+            recover_folder(item)
+        else:  # Album
+            recover_album(item, db_path)
+    
+    echo(f"\n✅ Successfully restored {len(selected_items)} item{'s' if len(selected_items) != 1 else ''}!")
 
 
 if __name__ == "__main__":
