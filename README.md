@@ -51,7 +51,7 @@ The script cannot restore any photos that have been permanently deleted from the
 
 The script cannot restore Smart Albums or Shared Albums.
 
-This has been tested on macOS Ventura 13.7.1 and macOS Sequoi 15.6 but it should work on any version of macOS since Catalina, 10.15. It will not work on earlier versions of macOS as the Photos database schema was different before Catalina.
+This has been tested on macOS Ventura 13.7.1 and macOS Sequoia 15.6 but it should work on any version of macOS since Catalina, 10.15. It will not work on earlier versions of macOS as the Photos database schema was different before Catalina.
 
 ## See Also
 
