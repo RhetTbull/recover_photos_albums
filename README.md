@@ -47,14 +47,11 @@ If the album is very large (1000s of photos), the script may take a long time to
 The album sort order will not be preserved when restoring the album. The restored album will
 use the default sort order for albums in the Photos app. (Sorted by date, oldest first.)
 
-Only top-level albums can be restored. The script cannot restore albums that are contained within folders.
-(It is technically feasible to restore albums within folders, but this is not currently implemented.)
 The script cannot restore any photos that have been permanently deleted from the Photos library.
 
 The script cannot restore Smart Albums or Shared Albums.
 
-This has been tested on macOS Ventura 13.7.1 but it should work on any version of macOS since Catalina, 10.15.
-It will not work on earlier versions of macOS as the Photos database schema was different before Catalina.
+This has been tested on macOS Ventura 13.7.1 and macOS Sequoi 15.6 but it should work on any version of macOS since Catalina, 10.15. It will not work on earlier versions of macOS as the Photos database schema was different before Catalina.
 
 ## See Also
 
