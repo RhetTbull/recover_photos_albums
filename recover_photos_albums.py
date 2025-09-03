@@ -25,12 +25,11 @@ import photoscript
 import questionary
 from click import echo
 from more_itertools import chunked
-from rich.console import Console
-from rich.progress import Progress
-
 from osxphotos.photos_datetime import photos_datetime_local
 from osxphotos.sqlite_utils import sqlite_open_ro
 from osxphotos.utils import get_last_library_path
+from rich.console import Console
+from rich.progress import Progress
 
 
 @dataclasses.dataclass
@@ -45,6 +44,7 @@ class Album:
     trashed: int
     trashed_date: datetime.datetime | None
     photo_count: int
+    folder_path: list[str] | None = None  # Path to folder hierarchy
 
 
 @cache
@@ -110,12 +110,55 @@ def get_album_table_columns(db_path) -> tuple[str, str, str, str]:
     return albums_assets_table, album_join, album_column, sort_column
 
 
+def build_folder_hierarchy(db_path: str) -> dict[int, list[str]]:
+    """Build a mapping of folder/album PKs to their folder path hierarchy."""
+    query = """
+    WITH RECURSIVE folder_hierarchy(pk, title, parent_pk, level, path) AS (
+        -- Base case: top-level library (ZKIND=3999)
+        SELECT Z_PK, ZTITLE, ZPARENTFOLDER, 0, '' 
+        FROM ZGENERICALBUM 
+        WHERE ZKIND = 3999
+        
+        UNION ALL
+        
+        -- Recursive case: folders and albums
+        SELECT ZG.Z_PK, ZG.ZTITLE, ZG.ZPARENTFOLDER, fh.level + 1,
+               CASE 
+                   WHEN fh.path = '' THEN ZG.ZTITLE
+                   ELSE fh.path || '/' || ZG.ZTITLE
+               END
+        FROM ZGENERICALBUM ZG
+        JOIN folder_hierarchy fh ON ZG.ZPARENTFOLDER = fh.pk
+        WHERE ZG.ZKIND IN (2, 4000) -- albums (2) and folders (4000)
+    )
+    SELECT pk, path FROM folder_hierarchy WHERE level > 0;
+    """
+
+    conn, cursor = sqlite_open_ro(db_path)
+    cursor.execute(query)
+    results = cursor.fetchall()
+    conn.close()
+
+    # Build mapping of pk -> folder_path_list
+    folder_paths = {}
+    for pk, path in results:
+        if path:
+            folder_paths[pk] = path.split("/")
+        else:
+            folder_paths[pk] = []
+
+    return folder_paths
+
+
 def get_albums_info(db_path: str) -> list[Album]:
-    """Get info on albums"""
+    """Get info on albums and folders, including their hierarchy."""
 
     albums_assets_table, album_join, album_column, sort_column = (
         get_album_table_columns(db_path)
     )
+
+    # Get folder hierarchy mapping
+    folder_paths = build_folder_hierarchy(db_path)
 
     query = f"""
     SELECT
@@ -131,11 +174,9 @@ def get_albums_info(db_path: str) -> list[Album]:
         ZGENERICALBUM ZG
     LEFT JOIN
         {albums_assets_table} ZAL ON ZG.Z_PK = ZAL.{album_column}
-    LEFT JOIN
-        ZGENERICALBUM ZP ON ZG.ZPARENTFOLDER = ZP.Z_PK
     WHERE
-       ZP.ZKIND = 3999 AND -- top-level library
-	   ZG.ZKIND = 2 -- regular albums
+        ZG.ZKIND IN (2, 4000) AND -- regular albums (2) and folders (4000)
+        ZG.ZPARENTFOLDER IS NOT NULL -- exclude top-level library
     GROUP BY
         ZG.Z_PK
     ORDER BY
@@ -152,7 +193,16 @@ def get_albums_info(db_path: str) -> list[Album]:
         album_data = list(album)
         if trashed_date := album_data[6]:
             album_data[6] = photos_datetime_local(trashed_date)
-        album_list.append(Album(*album_data))
+
+        # Get folder path for this item
+        pk = album_data[0]
+        folder_path = folder_paths.get(pk, [])
+
+        # Create Album object with folder path
+        album_obj = Album(*album_data)
+        album_obj.folder_path = folder_path
+        album_list.append(album_obj)
+
     return album_list
 
 
@@ -233,12 +283,15 @@ def get_db_path(library: os.PathLike | None) -> str:
     return db_path
 
 
-def create_and_populate_album(title: str, uuids: list[str]) -> photoscript.Album:
+def create_and_populate_album(
+    title: str, uuids: list[str], folder_path: list[str] | None = None
+) -> photoscript.Album:
     """Create and populate an album with the given photo UUIDs.
 
     Args:
         title: The title of the album.
         uuids: The UUIDs of the photos to add to the album.
+        folder_path: List of folder names representing the folder hierarchy.
 
     Returns: The created album.
 
@@ -246,18 +299,41 @@ def create_and_populate_album(title: str, uuids: list[str]) -> photoscript.Album
     Photos allows multiple albums with the same name.
     """
     library = photoscript.PhotosLibrary()
-    album = library.create_album(title)
+
+    # Create album with folder hierarchy if specified
+    if folder_path and len(folder_path) > 0:
+        # Use make_album_folders to create album within folder structure
+        album = library.make_album_folders(title, folder_path)
+    else:
+        # Create album at root level
+        album = library.create_album(title)
+
     uuid_count = len(uuids)
-    with Progress() as progress:
-        task = progress.add_task(
-            f"Adding {uuid_count} photo{'s' if uuid_count != 1 else ''} to album '{title}'",
-            total=uuid_count,
-        )
-        for uuid_chunk in chunked(uuids, 10):
-            photos = uuids_to_photos(uuid_chunk, progress.console)
-            album.add(photos)
-            progress.update(task, advance=len(uuid_chunk))
+    if uuid_count > 0:
+        with Progress() as progress:
+            task = progress.add_task(
+                f"Adding {uuid_count} photo{'s' if uuid_count != 1 else ''} to album '{title}'",
+                total=uuid_count,
+            )
+            for uuid_chunk in chunked(uuids, 10):
+                photos = uuids_to_photos(uuid_chunk, progress.console)
+                album.add(photos)
+                progress.update(task, advance=len(uuid_chunk))
+
     return album
+
+
+def create_folder(folder_path: list[str]) -> photoscript.Folder:
+    """Create a folder hierarchy.
+
+    Args:
+        folder_path: List of folder names representing the folder hierarchy.
+
+    Returns: The created folder.
+    """
+    library = photoscript.PhotosLibrary()
+    folder = library.make_folders(folder_path)
+    return folder
 
 
 def uuids_to_photos(uuids: list[str], console: Console) -> list[photoscript.Photo]:
@@ -283,15 +359,32 @@ def uuids_to_photos(uuids: list[str], console: Console) -> list[photoscript.Phot
 
 
 def select_album_or_exit(albums: list[Album]) -> Album:
-    album_choices = {
-        f"{album.title} ({album.uuid}), "
-        + f"deleted on {album.trashed_date.strftime('%Y-%m-%d')}, "
-        + f"contains {album.photo_count} photo{'s' if album.photo_count != 1 else ''}": album
-        for album in albums
-    }
+    album_choices = {}
+    for album in albums:
+        # Build display text with folder path if available
+        folder_display = ""
+        if album.folder_path and len(album.folder_path) > 0:
+            folder_display = f" (in {'/'.join(album.folder_path)})"
+
+        item_type = "folder" if album.kind == 4000 else "album"
+        photo_text = (
+            f"contains {album.photo_count} photo{'s' if album.photo_count != 1 else ''}"
+            if album.kind == 2
+            else "folder"
+        )
+
+        display_text = (
+            f"{album.title}{folder_display} [{item_type}], "
+            + f"deleted on {album.trashed_date.strftime('%Y-%m-%d')}, "
+            + f"{photo_text}"
+        )
+        album_choices[display_text] = album
+
     choices = list(album_choices.keys())
     choices.append("Exit")
-    choice = questionary.select("Select an album to restore", choices=choices).ask()
+    choice = questionary.select(
+        "Select an album or folder to restore", choices=choices
+    ).ask()
     if choice == "Exit":
         exit()
     return album_choices[choice]
@@ -300,22 +393,52 @@ def select_album_or_exit(albums: list[Album]) -> Album:
 @click.command(name="recover_photos_albums")
 @click.option("--library", type=click.Path(exists=True))
 def main(library: str | None):
-    """Recover deleted albums from a Photos library"""
+    """Recover deleted albums and folders from a Photos library"""
 
-    # list all deleted albums and ask user to select one
+    # list all deleted albums and folders and ask user to select one
     library = get_db_path(library)
     albums = [album for album in get_albums_info(library) if album.trashed]
+
+    if not albums:
+        echo("No deleted albums or folders found.")
+        return
+
     album = select_album_or_exit(albums)
 
+    item_type = "folder" if album.kind == 4000 else "album"
     confirm = questionary.confirm(
-        f"Are you sure you want to restore the album '{album.title}'?"
+        f"Are you sure you want to restore the {item_type} '{album.title}'?"
     ).ask()
     if not confirm:
         exit()
 
-    # get the photos in the album and create a new album with them
-    photo_uuids = get_photos_in_album(library, album.uuid)
-    create_and_populate_album(album.title, photo_uuids)
+    # Handle folder recovery
+    if album.kind == 4000:  # Folder
+        echo(f"Creating folder: {album.title}")
+        # Determine the folder path - exclude the current folder name from the path
+        folder_path = (
+            album.folder_path[:-1]
+            if album.folder_path and len(album.folder_path) > 1
+            else []
+        )
+        if folder_path:
+            folder_path.append(album.title)
+            create_folder(folder_path)
+        else:
+            # Create folder at root level
+            create_folder([album.title])
+        echo(f"Folder '{album.title}' has been restored.")
+    else:  # Album
+        # get the photos in the album and create a new album with them
+        photo_uuids = get_photos_in_album(library, album.uuid)
+        # Determine folder path for the album (exclude album name itself)
+        folder_path = (
+            album.folder_path[:-1]
+            if album.folder_path and len(album.folder_path) > 1
+            else None
+        )
+        create_and_populate_album(album.title, photo_uuids, folder_path)
+        echo(f"Album '{album.title}' has been restored with {len(photo_uuids)} photos.")
 
 
 if __name__ == "__main__":
