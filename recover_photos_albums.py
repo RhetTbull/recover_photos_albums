@@ -336,6 +336,81 @@ def create_folder(folder_path: list[str]) -> photoscript.Folder:
     return folder
 
 
+def recover_folder(album: Album) -> None:
+    """Recover a deleted folder by recreating its folder hierarchy.
+
+    Args:
+        album: The Album object representing the folder to recover.
+    """
+    echo(f"Creating folder: {album.title}")
+
+    # Determine the folder path - exclude the current folder name from the path
+    parent_folder_path = (
+        album.folder_path[:-1]
+        if album.folder_path and len(album.folder_path) > 1
+        else []
+    )
+
+    # Build the complete folder path including the folder being restored
+    if parent_folder_path:
+        complete_folder_path = parent_folder_path + [album.title]
+    else:
+        # Create folder at root level
+        complete_folder_path = [album.title]
+
+    create_folder(complete_folder_path)
+    echo(f"Folder '{album.title}' has been restored.")
+
+
+def recover_album(album: Album, db_path: str) -> None:
+    """Recover a deleted album by recreating it with its photos in the correct folder.
+
+    Args:
+        album: The Album object representing the album to recover.
+        db_path: Path to the Photos database.
+    """
+    # Get the photos in the album
+    photo_uuids = get_photos_in_album(db_path, album.uuid)
+
+    # Determine folder path for the album (exclude album name itself)
+    parent_folder_path = (
+        album.folder_path[:-1]
+        if album.folder_path and len(album.folder_path) > 1
+        else None
+    )
+
+    create_and_populate_album(album.title, photo_uuids, parent_folder_path)
+    echo(f"Album '{album.title}' has been restored with {len(photo_uuids)} photos.")
+
+
+def get_deleted_items(db_path: str) -> list[Album]:
+    """Get all deleted albums and folders from the Photos library.
+
+    Args:
+        db_path: Path to the Photos database.
+
+    Returns:
+        List of deleted Album objects.
+    """
+    all_items = get_albums_info(db_path)
+    return [item for item in all_items if item.trashed]
+
+
+def confirm_recovery(album: Album) -> bool:
+    """Ask user to confirm recovery of the selected item.
+
+    Args:
+        album: The Album object to confirm recovery for.
+
+    Returns:
+        True if user confirms, False otherwise.
+    """
+    item_type = "folder" if album.kind == 4000 else "album"
+    return questionary.confirm(
+        f"Are you sure you want to restore the {item_type} '{album.title}'?"
+    ).ask()
+
+
 def uuids_to_photos(uuids: list[str], console: Console) -> list[photoscript.Photo]:
     """Convert a list of photo UUIDs to a list of Photo objects. Ignore invalid UUIDs.
 
@@ -395,50 +470,26 @@ def select_album_or_exit(albums: list[Album]) -> Album:
 def main(library: str | None):
     """Recover deleted albums and folders from a Photos library"""
 
-    # list all deleted albums and folders and ask user to select one
-    library = get_db_path(library)
-    albums = [album for album in get_albums_info(library) if album.trashed]
+    # Get database path and find deleted items
+    db_path = get_db_path(library)
+    deleted_items = get_deleted_items(db_path)
 
-    if not albums:
+    if not deleted_items:
         echo("No deleted albums or folders found.")
         return
 
-    album = select_album_or_exit(albums)
+    # Let user select which item to restore
+    selected_item = select_album_or_exit(deleted_items)
 
-    item_type = "folder" if album.kind == 4000 else "album"
-    confirm = questionary.confirm(
-        f"Are you sure you want to restore the {item_type} '{album.title}'?"
-    ).ask()
-    if not confirm:
+    # Confirm recovery with user
+    if not confirm_recovery(selected_item):
         exit()
 
-    # Handle folder recovery
-    if album.kind == 4000:  # Folder
-        echo(f"Creating folder: {album.title}")
-        # Determine the folder path - exclude the current folder name from the path
-        folder_path = (
-            album.folder_path[:-1]
-            if album.folder_path and len(album.folder_path) > 1
-            else []
-        )
-        if folder_path:
-            folder_path.append(album.title)
-            create_folder(folder_path)
-        else:
-            # Create folder at root level
-            create_folder([album.title])
-        echo(f"Folder '{album.title}' has been restored.")
+    # Perform the recovery based on item type
+    if selected_item.kind == 4000:  # Folder
+        recover_folder(selected_item)
     else:  # Album
-        # get the photos in the album and create a new album with them
-        photo_uuids = get_photos_in_album(library, album.uuid)
-        # Determine folder path for the album (exclude album name itself)
-        folder_path = (
-            album.folder_path[:-1]
-            if album.folder_path and len(album.folder_path) > 1
-            else None
-        )
-        create_and_populate_album(album.title, photo_uuids, folder_path)
-        echo(f"Album '{album.title}' has been restored with {len(photo_uuids)} photos.")
+        recover_album(selected_item, db_path)
 
 
 if __name__ == "__main__":
